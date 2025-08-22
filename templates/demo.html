@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hardison Heat - Air - Plumbing | Voice Agent Demo</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            max-width: 600px;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 1.8em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .status {
+            text-align: center;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-radius: 10px;
+            background: #f8f9fa;
+            border-left: 4px solid #007bff;
+        }
+
+        .status.connected {
+            border-left-color: #28a745;
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            border-left-color: #dc3545;
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .voice-controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+            justify-content: center;
+        }
+
+        .btn {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 50px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+            color: white;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .conversation {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #dee2e6;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            background: #f8f9fa;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            padding: 12px 16px;
+            border-radius: 18px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+
+        .message.user {
+            background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+
+        .message.agent {
+            background: white;
+            border: 1px solid #dee2e6;
+            color: #333;
+        }
+
+        .message .timestamp {
+            font-size: 0.8em;
+            opacity: 0.7;
+            margin-top: 5px;
+        }
+
+        .text-input-section {
+            border-top: 1px solid #dee2e6;
+            padding-top: 20px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        .text-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid #dee2e6;
+            border-radius: 25px;
+            font-size: 1em;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+
+        .text-input:focus {
+            border-color: #007bff;
+        }
+
+        .send-btn {
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .send-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        .recording {
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .business-info {
+            text-align: center;
+            margin-top: 30px;
+            padding: 20px;
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 10px;
+        }
+
+        .business-info h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .business-info p {
+            color: #666;
+            margin: 5px 0;
+        }
+
+        .audio-visualizer {
+            height: 40px;
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            border-radius: 20px;
+            margin: 10px 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+
+        .audio-visualizer.active {
+            display: flex;
+            animation: pulse 1s infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏠 Hardison Heat - Air - Plumbing</h1>
+            <p>Voice Agent Demo - Talk to Sarah!</p>
+        </div>
+        
+        <div class="content">
+            <div id="status" class="status">
+                🔄 Connecting to voice agent...
+            </div>
+
+            <div class="voice-controls">
+                <button id="startRecording" class="btn btn-primary">
+                    🎤 Start Recording
+                </button>
+                <button id="stopRecording" class="btn btn-danger" disabled>
+                    ⏹️ Stop Recording
+                </button>
+            </div>
+
+            <div class="audio-visualizer" id="audioVisualizer">
+                🎤 Recording... Speak now!
+            </div>
+
+            <div id="conversation" class="conversation">
+                <div class="message agent">
+                    <div>Hi! This is Sarah from Hardison Heat, Air, and Plumbing. How can I help you today?</div>
+                    <div class="timestamp">Voice Agent Ready</div>
+                </div>
+            </div>
+
+            <div class="text-input-section">
+                <h4 style="margin-bottom: 15px; color: #333;">💬 Or Type Your Message:</h4>
+                <div class="input-group">
+                    <input type="text" id="textInput" class="text-input" placeholder="Type your message here..." maxlength="500">
+                    <button id="sendText" class="send-btn">Send</button>
+                </div>
+            </div>
+
+            <div class="business-info">
+                <h3>📞 Contact Information</h3>
+                <p><strong>Phone:</strong> 512-677-5146</p>
+                <p><strong>Hours:</strong> 9 AM to 5 PM, Monday through Sunday</p>
+                <p><strong>Service Area:</strong> Post Falls, Idaho and surrounding areas</p>
+                <p><strong>Experience:</strong> 30+ years in HVAC and Plumbing</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize Socket.IO connection
+        const socket = io();
+        
+        // DOM elements
+        const statusDiv = document.getElementById('status');
+        const startBtn = document.getElementById('startRecording');
+        const stopBtn = document.getElementById('stopRecording');
+        const conversation = document.getElementById('conversation');
+        const textInput = document.getElementById('textInput');
+        const sendBtn = document.getElementById('sendText');
+        const audioVisualizer = document.getElementById('audioVisualizer');
+        
+        // Audio recording variables
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+        
+        // Generate session ID
+        const sessionId = 'session_' + Date.now();
+        
+        // Socket event handlers
+        socket.on('connect', function() {
+            updateStatus('🟢 Connected to Hardison Voice Agent', 'connected');
+        });
+        
+        socket.on('disconnect', function() {
+            updateStatus('🔴 Disconnected from voice agent', 'error');
+        });
+        
+        socket.on('transcription', function(data) {
+            addMessage(data.text, 'user');
+        });
+        
+        socket.on('ai_response', function(data) {
+            addMessage(data.text, 'agent');
+            
+            // Play audio response if available
+            if (data.audio) {
+                playAudioResponse(data.audio);
+            }
+        });
+        
+        socket.on('error', function(data) {
+            updateStatus('❌ ' + data.message, 'error');
+        });
+        
+        // Audio recording functions
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+                
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const base64Audio = reader.result.split(',')[1];
+                        socket.emit('audio_data', {
+                            audio: base64Audio,
+                            session_id: sessionId
+                        });
+                    };
+                    reader.readAsDataURL(audioBlob);
+                };
+                
+                mediaRecorder.start();
+                isRecording = true;
+                
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+                startBtn.classList.add('recording');
+                audioVisualizer.classList.add('active');
+                
+                updateStatus('🎤 Recording... Speak now!', 'connected');
+                
+            } catch (error) {
+                updateStatus('❌ Could not access microphone', 'error');
+                console.error('Error accessing microphone:', error);
+            }
+        }
+        
+        function stopRecording() {
+            if (mediaRecorder && isRecording) {
+                mediaRecorder.stop();
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                isRecording = false;
+                
+                startBtn.disabled = false;
+                stopBtn.disabled = true;
+                startBtn.classList.remove('recording');
+                audioVisualizer.classList.remove('active');
+                
+                updateStatus('🔄 Processing your message...', '');
+            }
+        }
+        
+        function sendTextMessage() {
+            const text = textInput.value.trim();
+            if (text) {
+                addMessage(text, 'user');
+                socket.emit('text_input', {
+                    text: text,
+                    session_id: sessionId
+                });
+                textInput.value = '';
+                updateStatus('🔄 Sarah is responding...', '');
+            }
+        }
+        
+        function playAudioResponse(base64Audio) {
+            try {
+                const audio = new Audio('data:audio/mp3;base64,' + base64Audio);
+                audio.play();
+                updateStatus('🔊 Sarah is speaking...', 'connected');
+                
+                audio.onended = () => {
+                    updateStatus('🟢 Ready for your next message', 'connected');
+                };
+            } catch (error) {
+                console.error('Error playing audio:', error);
+                updateStatus('🟢 Ready for your next message', 'connected');
+            }
+        }
+        
+        function addMessage(text, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+            
+            const timestamp = new Date().toLocaleTimeString();
+            const senderName = sender === 'user' ? 'You' : 'Sarah';
+            
+            messageDiv.innerHTML = `
+                <div>${text}</div>
+                <div class="timestamp">${senderName} - ${timestamp}</div>
+            `;
+            
+            conversation.appendChild(messageDiv);
+            conversation.scrollTop = conversation.scrollHeight;
+        }
+        
+        function updateStatus(message, type = '') {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+        
+        // Event listeners
+        startBtn.addEventListener('click', startRecording);
+        stopBtn.addEventListener('click', stopRecording);
+        sendBtn.addEventListener('click', sendTextMessage);
+        
+        textInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendTextMessage();
+            }
+        });
+        
+        // Initial status
+        updateStatus('🔄 Connecting to voice agent...', '');
+    </script>
+</body>
+</html>
