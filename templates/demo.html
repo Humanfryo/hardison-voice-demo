@@ -448,6 +448,15 @@
             }
         }
 
+        .speech-not-supported {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+
         @media (max-width: 768px) {
             .main-container {
                 margin: 10px;
@@ -482,15 +491,6 @@
                 margin-bottom: 10px;
             }
         }
-
-        .speech-not-supported {
-            background: #fff3cd;
-            border: 1px solid #ffeaa7;
-            color: #856404;
-            padding: 15px;
-            border-radius: 10px;
-            margin: 20px 0;
-        }
     </style>
 </head>
 <body>
@@ -518,7 +518,7 @@
             </div>
 
             <div id="speechNotSupported" class="speech-not-supported" style="display: none;">
-                <strong>Voice Recognition Not Available:</strong> Your browser doesn't support speech recognition. Please use the text input below or try Chrome/Edge browsers.
+                <strong>Voice Recognition Not Available:</strong> Please use Chrome or Edge browser for voice features, or use the text input below.
             </div>
 
             <div class="conversation-panel">
@@ -594,6 +594,7 @@
         const socket = io();
         let speechRecognition;
         let isListening = false;
+        let speechSupported = false;
 
         // UI Elements
         const micButton = document.getElementById('micButton');
@@ -603,75 +604,91 @@
         const textInput = document.getElementById('textInput');
         const speechNotSupported = document.getElementById('speechNotSupported');
 
-        // Initialize Browser Speech Recognition
-        function initializeSpeechRecognition() {
-            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                speechRecognition = new SpeechRecognition();
-                
-                speechRecognition.continuous = false;
-                speechRecognition.interimResults = false;
-                speechRecognition.lang = 'en-US';
-                speechRecognition.maxAlternatives = 1;
-
-                speechRecognition.onstart = () => {
-                    console.log('Speech recognition started');
-                    isListening = true;
-                    micButton.className = 'mic-button listening';
-                    micStatus.textContent = '🎤 Listening... (speak now)';
-                    micStatus.className = 'mic-status status-listening';
-                };
-
-                speechRecognition.onresult = (event) => {
-                    const transcript = event.results[0][0].transcript;
-                    console.log('Speech recognized:', transcript);
-                    
-                    // Add user message to conversation
-                    addMessage('user', 'You', transcript);
-                    
-                    // Send to server for processing
-                    sendTextToServer(transcript);
-                };
-
-                speechRecognition.onerror = (event) => {
-                    console.error('Speech recognition error:', event.error);
-                    micButton.className = 'mic-button ready';
-                    micStatus.textContent = '❌ Speech error - try again';
-                    micStatus.className = 'mic-status status-error';
-                    isListening = false;
-                };
-
-                speechRecognition.onend = () => {
-                    console.log('Speech recognition ended');
-                    isListening = false;
-                    if (micButton.className === 'mic-button listening') {
-                        micButton.className = 'mic-button ready';
-                        micStatus.textContent = '🎙️ Tap to speak again';
-                        micStatus.className = 'mic-status status-ready';
-                    }
-                };
-
-                return true;
+        // Check for speech recognition support
+        function checkSpeechSupport() {
+            if ('webkitSpeechRecognition' in window) {
+                speechSupported = true;
+                initializeSpeechRecognition();
+            } else if ('SpeechRecognition' in window) {
+                speechSupported = true;
+                initializeSpeechRecognition();
             } else {
                 console.warn('Speech recognition not supported');
                 speechNotSupported.style.display = 'block';
-                return false;
+                micButton.disabled = true;
+                micStatus.textContent = '💬 Voice not supported - use text input';
+                micStatus.className = 'mic-status status-error';
+                speechSupported = false;
             }
+        }
+
+        // Initialize Speech Recognition
+        function initializeSpeechRecognition() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            speechRecognition = new SpeechRecognition();
+            
+            speechRecognition.continuous = false;
+            speechRecognition.interimResults = false;
+            speechRecognition.lang = 'en-US';
+            speechRecognition.maxAlternatives = 1;
+
+            speechRecognition.onstart = function() {
+                console.log('Speech recognition started');
+                isListening = true;
+                micButton.className = 'mic-button listening';
+                micStatus.textContent = '🎤 Listening... (speak clearly)';
+                micStatus.className = 'mic-status status-listening';
+            };
+
+            speechRecognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                console.log('Speech recognized:', transcript);
+                
+                // Add user message to conversation
+                addMessage('user', 'You', transcript);
+                
+                // Send to server for processing
+                sendTextToServer(transcript);
+            };
+
+            speechRecognition.onerror = function(event) {
+                console.error('Speech recognition error:', event.error);
+                isListening = false;
+                
+                let errorMessage = 'Speech error - try again';
+                if (event.error === 'no-speech') {
+                    errorMessage = 'No speech detected - try again';
+                } else if (event.error === 'not-allowed') {
+                    errorMessage = 'Microphone access denied';
+                } else if (event.error === 'network') {
+                    errorMessage = 'Network error - check connection';
+                }
+                
+                micButton.className = 'mic-button ready';
+                micStatus.textContent = `❌ ${errorMessage}`;
+                micStatus.className = 'mic-status status-error';
+            };
+
+            speechRecognition.onend = function() {
+                console.log('Speech recognition ended');
+                isListening = false;
+                if (micButton.className === 'mic-button listening') {
+                    micButton.className = 'mic-button ready';
+                    micStatus.textContent = '🎙️ Tap to speak again';
+                    micStatus.className = 'mic-status status-ready';
+                }
+            };
         }
 
         // Socket event handlers
         socket.on('connect', function() {
             console.log('Connected to server');
-            const speechSupported = initializeSpeechRecognition();
+            checkSpeechSupport();
             
             if (speechSupported) {
                 micStatus.textContent = '🎙️ Tap to start speaking';
                 micStatus.className = 'mic-status status-connected';
                 micButton.disabled = false;
-            } else {
-                micStatus.textContent = '💬 Voice not supported - use text input';
-                micStatus.className = 'mic-status status-error';
-                micButton.disabled = true;
             }
         });
 
@@ -706,8 +723,14 @@
 
         // Main microphone button handler
         micButton.addEventListener('click', function() {
-            if (!isListening && speechRecognition) {
-                speechRecognition.start();
+            if (speechSupported && !isListening && speechRecognition) {
+                try {
+                    speechRecognition.start();
+                } catch (error) {
+                    console.error('Error starting speech recognition:', error);
+                    micStatus.textContent = '❌ Could not start speech recognition';
+                    micStatus.className = 'mic-status status-error';
+                }
             }
         });
 
@@ -724,10 +747,14 @@
         }
 
         function playAudio(audioBase64) {
-            const audioUrl = `data:audio/mp3;base64,${audioBase64}`;
-            audioPlayer.src = audioUrl;
-            audioPlayer.style.display = 'block';
-            audioPlayer.play().catch(e => console.warn('Audio play failed:', e));
+            try {
+                const audioUrl = `data:audio/mp3;base64,${audioBase64}`;
+                audioPlayer.src = audioUrl;
+                audioPlayer.style.display = 'block';
+                audioPlayer.play().catch(e => console.warn('Audio play failed:', e));
+            } catch (error) {
+                console.warn('Could not play audio:', error);
+            }
         }
 
         function addMessage(type, sender, text) {
