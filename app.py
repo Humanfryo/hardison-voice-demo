@@ -1,111 +1,110 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO, emit
 import os
 import asyncio
 import base64
-import io
-import wave
 import json
-from elevenlabs import ElevenLabs, VoiceSettings
+from elevenlabs import VoiceSettings, generate
 import google.generativeai as genai
 from dotenv import load_dotenv
 from datetime import datetime
-import speech_recognition as sr
-import tempfile
-import threading
+import logging
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'hardison-voice-agent-secret'
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", logger=True)
 
-class WebHardisonVoiceAgent:
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class ProductionHardisonVoiceAgent:
     def __init__(self):
         # Configure APIs
         genai.configure(api_key=os.getenv('GOOGLE_API_KEY'))
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self.model = genai.GenerativeModel(
+            'gemini-2.5-flash',
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.7,
+                max_output_tokens=500,
+                candidate_count=1,
+            )
+        )
         
-        # Initialize ElevenLabs client
-        self.elevenlabs_client = ElevenLabs(api_key=os.getenv('ELEVENLABS_API_KEY'))
-        
-        # Initialize speech recognition
-        self.recognizer = sr.Recognizer()
-        
-        # Business information
-        self.business_info = {
+        # Enhanced business context
+        self.business_context = {
             'name': 'Hardison Heat - Air - Plumbing',
             'owner': 'Jason',
             'location': 'Post Falls, Idaho',
             'hours': '9 AM to 5 PM, Monday through Sunday',
-            'phone': '512-677-5146'
+            'phone': '512-567-6370',
+            'specialties': {
+                'hvac': ['heating', 'cooling', 'air conditioning', 'furnace', 'heat pump'],
+                'plumbing': ['leaks', 'clogs', 'water heater', 'pipes', 'fixtures'],
+                'emergency': ['no heat', 'no ac', 'water leak', 'gas smell', 'frozen pipes']
+            }
         }
         
-        # Store conversation sessions
+        # Session management for natural conversations
         self.sessions = {}
+        self.conversation_memory = {}
         
-    def setup_system_prompt(self):
-        """Set up the AI agent's personality and knowledge"""
+    def get_enhanced_system_prompt(self):
+        """Enhanced system prompt for natural conversations"""
         current_season = self.get_current_season()
         
-        system_prompt = f"""
-You are Sarah, the friendly booking assistant for Hardison Heat - Air - Plumbing in Post Falls, Idaho.
+        return f"""You are Sarah, the professional AI assistant for Hardison Heat - Air - Plumbing.
 
-COMPANY INFO:
-- Owner: Jason Hardison, 30+ years experience
-- Service Area: Post Falls, Idaho and surrounding areas  
-- Hours: 9 AM to 5 PM, Monday through Sunday
-- Phone: 512-677-5146
-- We offer financing options
+CORE IDENTITY:
+- Warm, empathetic, and genuinely helpful
+- 30+ years of HVAC/plumbing expertise through Jason's experience
+- Local Post Falls, Idaho expert who understands regional climate needs
+- Professional but conversational - like talking to a trusted neighbor
 
-CURRENT SEASON: {current_season}
-PRIORITY EMERGENCIES: {"heating" if current_season == "winter" else "AC" if current_season == "summer" else "plumbing"}
+BUSINESS EXPERTISE:
+- Owner: Jason Hardison (30+ years experience)
+- Service Area: Post Falls, Idaho and surrounding areas
+- Hours: 9 AM - 5 PM, Monday through Sunday  
+- Phone: 512-567-6370
+- Current Season: {current_season} (prioritize {self.get_seasonal_priorities(current_season)})
 
-SERVICES:
-1. HVAC Service & Repair (heating, cooling, AC)
-2. Plumbing Service & Repair (leaks, clogs, installations)  
-3. New Equipment Installations
-4. Preventive Maintenance
-5. Emergency Repairs
+CONVERSATION STYLE:
+- Listen actively and acknowledge customer emotions
+- Ask clarifying questions naturally (one at a time)
+- Use simple, clear language - avoid technical jargon unless needed
+- Show empathy for emergency situations
+- Be efficient but thorough for routine requests
+- Remember previous conversation context
 
-YOUR PERSONALITY:
-- Warm, professional, and helpful
-- Ask ONE question at a time
-- Use simple, clear language
-- Be empathetic for emergencies
-- Efficient for busy customers
+EMERGENCY DETECTION:
+- No heat (winter priority) / No AC (summer priority)  
+- Water leaks or flooding (immediate response)
+- Gas smells (safety priority)
+- Frozen pipes (winter concern)
+- Complete system failures
 
 CONVERSATION FLOW:
-1. Greet and ask how you can help
-2. Identify service needed and urgency
-3. Collect: name, phone, address, problem description
-4. Suggest appointment times
-5. Confirm details
-6. Provide next steps
+1. Greet warmly and identify the core issue
+2. Assess urgency level and respond appropriately
+3. Gather essential info: name, phone, address, problem details
+4. Provide realistic timeframes and next steps
+5. Confirm appointment details clearly
+6. End with reassurance and clear expectations
 
-EMERGENCY INDICATORS:
-- No heat in winter / No AC in summer
-- Water leaks or flooding
-- Gas smell
-- Frozen pipes
-- No hot water
+RESPONSE GUIDELINES:
+- Keep responses conversational and under 50 words
+- Use natural transitions and acknowledgments
+- Remember customer details throughout conversation
+- Provide specific, actionable next steps
+- Always end with confidence and reassurance
 
-SAMPLE RESPONSES:
-- Emergency: "Oh no! That sounds urgent. Let me get someone out to you today."
-- Routine: "I'd be happy to schedule your maintenance. What day works best?"
-- Confirmation: "Perfect! I have you scheduled for [service] on [date] at [time]."
+Remember: You represent a trusted local business with deep roots in the community. Every interaction should reflect professionalism, expertise, and genuine care for customer needs."""
 
-Keep responses under 50 words. Be conversational, not robotic.
-"""
-        
-        return [
-            {"role": "user", "parts": [f"System: {system_prompt}"]},
-            {"role": "model", "parts": ["I understand. I'm ready to help as Sarah from Hardison Heat-Air-Plumbing."]}
-        ]
-    
     def get_current_season(self):
-        """Determine current season for prioritizing emergencies"""
+        """Determine current season for contextual responses"""
         month = datetime.now().month
         if month in [12, 1, 2]:
             return 'winter'
@@ -114,49 +113,56 @@ Keep responses under 50 words. Be conversational, not robotic.
         else:
             return 'spring_fall'
     
-    def process_audio(self, audio_data, session_id):
-        """Process audio data and return transcription"""
+    def get_seasonal_priorities(self, season):
+        """Get seasonal emergency priorities"""
+        priorities = {
+            'winter': 'heating emergencies, frozen pipes, furnace issues',
+            'summer': 'AC failures, cooling system problems', 
+            'spring_fall': 'maintenance, water leaks, general repairs'
+        }
+        return priorities.get(season, 'general service needs')
+
+    def initialize_conversation(self, session_id):
+        """Initialize conversation with enhanced context"""
+        if session_id not in self.sessions:
+            system_prompt = self.get_enhanced_system_prompt()
+            
+            self.sessions[session_id] = [
+                {"role": "user", "parts": [f"System: {system_prompt}"]},
+                {"role": "model", "parts": ["I understand. I'm ready to help as Sarah from Hardison Heat, Air, and Plumbing. I'll provide warm, professional service with our 30+ years of expertise."]}
+            ]
+            
+            self.conversation_memory[session_id] = {
+                'customer_name': None,
+                'phone': None,
+                'address': None,
+                'service_type': None,
+                'urgency': None,
+                'appointment_preferences': []
+            }
+        
+        return self.sessions[session_id]
+
+    async def process_conversation(self, text, session_id):
+        """Enhanced conversation processing with context management"""
         try:
-            # Convert base64 audio to wav file
-            audio_bytes = base64.b64decode(audio_data)
+            logger.info(f"Processing message for session {session_id}: {text}")
             
-            # Create temporary file
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                temp_file.write(audio_bytes)
-                temp_file.flush()
-                
-                # Use speech recognition
-                with sr.AudioFile(temp_file.name) as source:
-                    audio = self.recognizer.record(source)
-                    text = self.recognizer.recognize_google(audio)
-                    
-                # Clean up temp file
-                os.unlink(temp_file.name)
-                
-                return text
-                
-        except Exception as e:
-            print(f"Error processing audio: {e}")
-            return None
-    
-    async def get_ai_response(self, user_input, session_id):
-        """Get response from Gemini 2.5 Flash"""
-        try:
-            # Get or create session
-            if session_id not in self.sessions:
-                self.sessions[session_id] = self.setup_system_prompt()
+            # Initialize conversation
+            conversation_history = self.initialize_conversation(session_id)
             
-            conversation_history = self.sessions[session_id]
-            
-            # Add user input to conversation history
+            # Add user message
             conversation_history.append({
                 "role": "user", 
-                "parts": [user_input]
+                "parts": [text]
             })
             
-            # Generate response
+            # Detect and store conversation elements
+            self.extract_conversation_context(text, session_id)
+            
+            # Generate contextual response
             chat = self.model.start_chat(history=conversation_history[:-1])
-            response = await chat.send_message_async(user_input)
+            response = await chat.send_message_async(text)
             
             response_text = response.text.strip()
             
@@ -166,45 +172,70 @@ Keep responses under 50 words. Be conversational, not robotic.
                 "parts": [response_text]
             })
             
-            # Keep conversation history manageable
-            if len(conversation_history) > 20:
-                system_msg = conversation_history[:2]
-                recent_msgs = conversation_history[-10:]
-                self.sessions[session_id] = system_msg + recent_msgs
+            # Manage conversation length
+            self.manage_conversation_memory(session_id)
             
+            logger.info(f"Generated response: {response_text}")
             return response_text
             
         except Exception as e:
-            print(f"AI Error: {e}")
-            return "I apologize for the technical difficulty. Please call us directly at 512-677-5146."
-    
-    def generate_speech(self, text):
-        """Convert text to speech using ElevenLabs"""
+            logger.error(f"Error in conversation processing: {e}")
+            return "I apologize for the technical difficulty. Please call us directly at 512-567-6370 for immediate assistance."
+
+    def extract_conversation_context(self, text, session_id):
+        """Extract and store conversation context for personalization"""
+        text_lower = text.lower()
+        memory = self.conversation_memory[session_id]
+        
+        # Extract service type
+        for service_type, keywords in self.business_context['specialties'].items():
+            if any(keyword in text_lower for keyword in keywords):
+                memory['service_type'] = service_type
+                break
+        
+        # Detect urgency indicators
+        emergency_words = ['emergency', 'urgent', 'immediately', 'asap', 'right now', 'not working', 'broken', 'flooding']
+        if any(word in text_lower for word in emergency_words):
+            memory['urgency'] = 'high'
+        elif any(word in text_lower for word in ['maintenance', 'schedule', 'routine', 'check']):
+            memory['urgency'] = 'routine'
+
+    def manage_conversation_memory(self, session_id):
+        """Keep conversation history manageable while preserving context"""
+        conversation = self.sessions[session_id]
+        
+        if len(conversation) > 25:  # Increased from 20 for better context
+            # Keep system prompt and recent exchanges
+            system_messages = conversation[:2]
+            recent_messages = conversation[-15:]  # Keep more recent context
+            self.sessions[session_id] = system_messages + recent_messages
+
+    def generate_speech_optimized(self, text):
+        """Optimized speech generation for natural conversations"""
         try:
-            # Generate audio using the new API
-            audio = self.elevenlabs_client.text_to_speech.convert(
+            logger.info(f"Generating speech for: {text[:50]}...")
+            
+            audio = generate(
                 text=text,
-                voice_id="21m00Tcm4TlvDq8ikWAM",  # Rachel - professional female voice
-                model_id="eleven_turbo_v2",
+                voice="Rachel",  # Professional, warm female voice
+                api_key=os.getenv('ELEVENLABS_API_KEY'),
+                model="eleven_turbo_v2",  # Fastest model for real-time conversation
                 voice_settings=VoiceSettings(
-                    stability=0.75,
+                    stability=0.8,  # Slightly higher for consistency
                     similarity_boost=0.75,
-                    style=0.0,
+                    style=0.1,  # Slight style for warmth
                     use_speaker_boost=True
                 )
             )
             
-            # Convert to bytes and then base64 for web transmission
-            audio_bytes = b"".join(audio)
-            audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-            return audio_base64
+            return base64.b64encode(audio).decode('utf-8')
             
         except Exception as e:
-            print(f"TTS Error: {e}")
+            logger.error(f"Speech generation error: {e}")
             return None
 
-# Initialize the agent
-agent = WebHardisonVoiceAgent()
+# Initialize the enhanced agent
+agent = ProductionHardisonVoiceAgent()
 
 @app.route('/')
 def index():
@@ -214,87 +245,64 @@ def index():
 @app.route('/health')
 def health():
     """Health check endpoint"""
-    return jsonify({"status": "healthy", "service": "Hardison Voice Agent"})
+    return jsonify({"status": "healthy", "service": "Hardison Production Voice Agent"})
 
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
-    print("Client connected")
-    emit('status', {'message': 'Connected to Hardison Voice Agent'})
+    logger.info("Client connected")
+    emit('status', {'message': 'Connected to Sarah - Hardison Voice Agent'})
 
 @socketio.on('disconnect')
 def handle_disconnect():
     """Handle client disconnection"""
-    print("Client disconnected")
+    logger.info("Client disconnected")
 
-@socketio.on('audio_data')
-def handle_audio(data):
-    """Handle incoming audio data"""
-    try:
-        audio_data = data['audio']
-        session_id = data.get('session_id', 'default')
-        
-        # Process speech to text
-        text = agent.process_audio(audio_data, session_id)
-        
-        if text:
-            emit('transcription', {'text': text})
-            
-            # Get AI response
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            ai_response = loop.run_until_complete(agent.get_ai_response(text, session_id))
-            
-            # Generate speech
-            audio_response = agent.generate_speech(ai_response)
-            
-            # Send response back
-            emit('ai_response', {
-                'text': ai_response,
-                'audio': audio_response
-            })
-        else:
-            emit('error', {'message': 'Could not understand audio'})
-            
-    except Exception as e:
-        print(f"Error handling audio: {e}")
-        emit('error', {'message': 'Error processing audio'})
-
-@socketio.on('text_input')
-def handle_text(data):
-    """Handle text input (for testing without microphone)"""
+@socketio.on('text_message')
+def handle_text_message(data):
+    """Handle text input from browser (STT will be handled client-side)"""
     try:
         text = data['text']
         session_id = data.get('session_id', 'default')
         
-        # Get AI response
+        logger.info(f"Received text message: {text}")
+        
+        # Process with enhanced conversation management
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        ai_response = loop.run_until_complete(agent.get_ai_response(text, session_id))
+        ai_response = loop.run_until_complete(
+            agent.process_conversation(text, session_id)
+        )
         
         # Generate speech
-        audio_response = agent.generate_speech(ai_response)
+        audio_response = agent.generate_speech_optimized(ai_response)
         
-        # Send response back
+        # Send comprehensive response
         emit('ai_response', {
             'text': ai_response,
-            'audio': audio_response
+            'audio': audio_response,
+            'session_context': agent.conversation_memory.get(session_id, {})
         })
         
     except Exception as e:
-        print(f"Error handling text: {e}")
-        emit('error', {'message': 'Error processing text'})
+        logger.error(f"Error handling text message: {e}")
+        emit('error', {'message': 'Sorry, I had a technical issue. Please try again or call 512-567-6370.'})
+
+# Legacy audio handler (will be replaced by client-side STT)
+@socketio.on('audio_data')
+def handle_audio(data):
+    """Legacy audio handler - recommend client-side STT instead"""
+    emit('error', {'message': 'Please use text input or enable browser speech recognition'})
 
 if __name__ == '__main__':
-    print("🚀 Starting Hardison Web Voice Agent...")
-    print("🌐 Access at: http://localhost:5000")
-    print("☁️  Ready for cloud deployment!")
+    logger.info("🚀 Starting Hardison Production Voice Agent...")
+    logger.info("🌐 Optimized for natural conversation and reliability")
     
-    # Check API keys
+    # Verify API keys
     required_keys = ['GOOGLE_API_KEY', 'ELEVENLABS_API_KEY']
     missing_keys = [key for key in required_keys if not os.getenv(key)]
     
     if missing_keys:
-        print(f"❌ Missing API keys: {', '.join(missing_keys)}")
+        logger.error(f"❌ Missing API keys: {', '.join(missing_keys)}")
     else:
-        socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+        socketio.run(app, debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
